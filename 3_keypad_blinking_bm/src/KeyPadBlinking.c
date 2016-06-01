@@ -70,7 +70,7 @@
 /*==================[macros and definitions]=================================*/
 #define TOGGLE_CYCLES 3
 #define MAXCOUNTER 10000000
-#define CYCLESPRESSED	3			// Cantidad de ciclos antes de tomar un botón como presionado
+#define CYCLESPRESSED	4			// Cantidad de ciclos antes de tomar un botón como presionado
 
 #define NEXT_CMD	0
 #define PREV_CMD	1
@@ -80,7 +80,7 @@
 /*==================[internal data declaration]==============================*/
 int32_t	counter = MAXCOUNTER;
 uint8_t commandList[4];					// Vector para vincular comandos con teclas
-bool bttnStates[4] = {false, false, false, false};
+bool bttnStates[4] = {true, true, true, true};
 uint8_t bttnCyclePressedCounters[4] = {0,0,0,0};
 
 
@@ -122,8 +122,8 @@ int main(void)
 	SetDelay(RIT_TIMER,15);		// Establecer un delay de 250 milisegundos en el timer
 
 	// Configurar lista de comandos
-	commandList[NEXT_CMD] 	= BTTN_1;
-	commandList[PREV_CMD] 	= BTTN_2;
+	commandList[NEXT_CMD] 	= BTTN_2;
+	commandList[PREV_CMD] 	= BTTN_1;
 	commandList[UP_CMD] 	= BTTN_3;
 	commandList[DWN_CMD] 	= BTTN_4;
 
@@ -133,11 +133,11 @@ int main(void)
 	ledList[2]	= REDLED;
 	ledList[3]	= GREENLED;
 
-	currentLed = ledList[0];
+	currentLed = 0;
 
 	// Prender el led rojo antes de empezar el encendido secuencial
 	//currentLed = REDLED;
-	LedOn(currentLed);
+	LedOn(ledList[currentLed]);
 
 	StartTimer(RIT_TIMER);		// Iniciar el timer
 
@@ -157,7 +157,7 @@ void ISR_RIT(void){
 	bttnStates[DWN_CMD] = ReadButton(commandList[DWN_CMD]);
 
 	// NEXT COMMAND
-	if( bttnStates[NEXT_CMD] == true ){
+	if( bttnStates[NEXT_CMD] == false ){
 		if( bttnCyclePressedCounters[NEXT_CMD] < CYCLESPRESSED ){
 			// Esperar a que el botón se mantenga apretado por más tiempo
 			bttnCyclePressedCounters[NEXT_CMD] = bttnCyclePressedCounters[NEXT_CMD] + 1;
@@ -167,7 +167,7 @@ void ISR_RIT(void){
 			// Realizar acción
 			bttnCyclePressedCounters[NEXT_CMD] = 0;
 			LedOff(ledList[currentLed]);			// Apagar el led actual
-			if( currentLed >= LEDCOUNT ){
+			if( currentLed >= (LEDCOUNT - 1) ){
 				currentLed = 0;
 			}
 			else{
@@ -182,7 +182,7 @@ void ISR_RIT(void){
 	}
 
 	// PREV COMMAND
-	if( bttnStates[PREV_CMD] == true ){
+	if( bttnStates[PREV_CMD] == false ){
 		if( bttnCyclePressedCounters[PREV_CMD] < CYCLESPRESSED ){
 			// Esperar a que el botón se mantenga apretado por más tiempo
 			bttnCyclePressedCounters[PREV_CMD] = bttnCyclePressedCounters[PREV_CMD] + 1;
@@ -192,8 +192,8 @@ void ISR_RIT(void){
 			// Realizar acción
 			bttnCyclePressedCounters[PREV_CMD] = 0;
 			LedOff(ledList[currentLed]);			// Apagar el led actual
-			if( currentLed <= 1 ){
-				currentLed = LEDCOUNT;
+			if( currentLed <= 0 ){
+				currentLed = LEDCOUNT - 1;
 			}
 			else{
 				--currentLed;
@@ -207,7 +207,7 @@ void ISR_RIT(void){
 	}
 
 	// UP COMMAND
-	if( bttnStates[UP_CMD] == true ){
+	if( bttnStates[UP_CMD] == false ){
 		if( bttnCyclePressedCounters[UP_CMD] < CYCLESPRESSED ){
 			// Esperar a que el botón se mantenga apretado por más tiempo
 			bttnCyclePressedCounters[UP_CMD] = bttnCyclePressedCounters[UP_CMD] + 1;
@@ -229,7 +229,7 @@ void ISR_RIT(void){
 	}
 
 	// DOWN COMMAND
-	if( bttnStates[DWN_CMD] == true ){
+	if( bttnStates[DWN_CMD] == false ){
 		if( bttnCyclePressedCounters[DWN_CMD] < CYCLESPRESSED ){
 			// Esperar a que el botón se mantenga apretado por más tiempo
 			bttnCyclePressedCounters[DWN_CMD] = bttnCyclePressedCounters[DWN_CMD] + 1;
@@ -251,7 +251,7 @@ void ISR_RIT(void){
 	}
 
 	// Cambiar el estado del led actual
-	if( elapsedToggleCycles < delayLedToggle ){
+	if( elapsedToggleCycles <= delayLedToggle ){
 		++elapsedToggleCycles;
 	}
 	else{

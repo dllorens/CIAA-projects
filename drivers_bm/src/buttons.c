@@ -34,6 +34,12 @@
 #define BTTN_3_BIT	1<<9
 #define BTTN_4_BIT	1<<9
 
+#define BTTN_1_PIN	4
+#define BTTN_2_PIN	8
+#define BTTN_3_PIN	9
+#define BTTN_4_PIN	9
+
+
 void InitButtons(void){
 
 	Chip_GPIO_Init(LPC_GPIO_PORT);
@@ -53,16 +59,16 @@ void InitButtons(void){
 bool ReadButton(uint8_t bttn){
 	switch(bttn){
 	case BTTN_1:
-		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_1_PORT,BTTN_1_BIT);
+		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_1_PORT,BTTN_1_PIN);
 		break;
 	case BTTN_2:
-		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_2_PORT,BTTN_2_BIT);
+		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_2_PORT,BTTN_2_PIN);
 		break;
 	case BTTN_3:
-		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_3_PORT,BTTN_3_BIT);
+		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_3_PORT,BTTN_3_PIN);
 		break;
 	case BTTN_4:
-		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_4_PORT,BTTN_4_BIT);
+		return Chip_GPIO_GetPinState(LPC_GPIO_PORT,BTTN_4_PORT,BTTN_4_PIN);
 		break;
 	default:
 		return false;
