@@ -78,13 +78,14 @@
 #define TIMER_DELAY_MS	1
 #define BTTN_DELAY_MS	15
 #define RGBLED_DELAY_MS	20
-#define WRITE_SERIAL_DELAY_MS	250
+#define WRITE_SERIAL_DELAY_MS	1000
 #define READ_SERIAL_DELAY_MS	50
 #define OUTPUT_SIGNAL_DELAY_MS	100
+#define ADC_DELAY_MS			10
 
 #define TOGGLE_CYCLES 3
 #define MAXCOUNTER 10000000
-#define CYCLESPRESSED	4			// Cantidad de ciclos antes de tomar un botón como presionado
+#define CYCLESPRESSED	6			// Cantidad de ciclos antes de tomar un botón como presionado
 
 #define OFF_UP_CMD		0
 #define OFF_DWN_CMD		1
@@ -96,6 +97,15 @@
 
 // UART communication
 #define BAUD_RATE	UART_BR_115200
+#define MSG_1		0
+#define MSG_2		1
+#define MSG_3		2
+#define MSG_4		3
+#define MSG_COUNT	4					// Cantidad de mensages a enviar
+
+// Signal processing defines
+#define MAX_GAIN_COUNT	5
+#define MAX_OFF_COUNT	5
 
 /*==================[internal data declaration]==============================*/
 int32_t	counter = MAXCOUNTER;
@@ -125,10 +135,21 @@ static volatile bool newSignalValue = false;
 static double adcMaxVoltage;
 static uint8_t adcBitResolution;
 static uint16_t adcMaxDigitalCount;
+uint32_t	adcCounter = 0;				// Contador para ejecutar las funciones de comandos de teclas
+uint32_t	adcCycles = (uint32_t)((float)(ADC_DELAY_MS)/(float)(TIMER_DELAY_MS));
 
-static double maxSignalValue = 3.0;
+// Procesamiento de la señal adquirida
+static double gainsList[MAX_GAIN_COUNT] = {0.8f,0.9f,1.0f,1.1f,1.2f};
+static double offsetList[MAX_OFF_COUNT] = {-0.2f,-0.1f,0.0f,0.1f,0.2f};
+static uint8_t currentGainIndex = 2;
+static uint8_t currentOffsetIndex = 2;
+static double currentGain;
+static double currentOffset;
+static double maxSignalValue = 0.0;
 static double minSignalValue = 0.0;
-static double signalEpsilon = 0.05;
+static double meanSignalValue = 0.0;
+static uint32_t	processedSamples = 0;
+static uint32_t samplesWindowSize = (uint32_t)(1.0/(float)(ADC_DELAY_MS)*1000.0);
 
 // Salida de datos por el UART
 static uint32_t uartCurrentSendingData;
@@ -137,11 +158,22 @@ static uint8_t lastByteSend = 0;
 static uint32_t writeSerialCounter = 0;
 static uint32_t	writeSerialCycles = (uint32_t)((float)(WRITE_SERIAL_DELAY_MS)/(float)(TIMER_DELAY_MS));				// Cantidad de ciclos que equivalen al tiempo en ms para ejecutar los comandos de las teclas
 static uint8_t	signalCharArray[4];
+static uint8_t	valueCharArray_uint8[4];
+static char message_1[] = "Gain:";
+static char message_2[] = "Offset:";
+static char message_3[] = "Min:";
+static char message_4[] = "Max:";
+static char currentMsg[32];
+static uint8_t currentSendingMsgIndex = 0;
+static uint8_t currentMsgSize = 0;
+static uint8_t messagesSent = 0;			// Cantidad de mensajes enviados
+static bool finishedSendMessage = true;
 
 // Entrada de datos por el UART
 static uint8_t	receivedByte;
 static uint8_t	readSerialCounter = 0;
 static uint32_t	readSerialCycles = (uint32_t)((float)(READ_SERIAL_DELAY_MS)/(float)(TIMER_DELAY_MS));
+
 
 /*==================[internal functions declaration]=========================*/
 
@@ -160,6 +192,9 @@ uint64_t	timeCounter = 0;
 
 /*==================[internal functions definition]==========================*/
 static void ProcessSignalValueToArray_uint32(uint32_t value);
+static void ProcessValueToArray_uint32(uint32_t value);
+static void ProcessValueToArray_double(double value);
+static uint8_t BuildMessageToSend(char str1[],uint8_t str2[]);
 
 /*==================[external functions definition]==========================*/
 /** \brief Main function
@@ -219,11 +254,14 @@ int main(void)
 	SignalSquareSetSamples(controlSignalSamplesPerPeriod);
 
 	// Leer configuración del ADC
-	adcMaxVoltage = ADCGetBitResolution();
+	adcMaxVoltage = ADCGetMaxVoltage();
 	adcBitResolution = ADCGetBitResolution();
 	adcMaxDigitalCount = (uint16_t)(pow(2,adcBitResolution)) - 1;
 
-	signalEpsilon = 0.01 * maxSignalValue;		// epsilon para detectar el valor máximo y mínimo
+	// Configuración del procesamiento de señal.
+	currentGain = gainsList[currentGainIndex];
+	currentOffset = offsetList[currentOffsetIndex];
+
 	signalDigitalValue = 0;
 
 	StartTimer(RIT_TIMER);		// Iniciar el timer
@@ -246,7 +284,12 @@ int main(void)
 					// Realizar acción
 					bttnCyclePressedCounters[GAIN_UP_CMD] = 0;
 
-					maxSignalValue -= 0.05;
+					++currentGainIndex;
+					if(currentGainIndex >= MAX_GAIN_COUNT){
+						currentGainIndex = (uint8_t)(MAX_GAIN_COUNT - 1);
+					}
+
+					currentGain = gainsList[currentGainIndex];
 				}
 			}
 			else{
@@ -264,8 +307,14 @@ int main(void)
 					// Realizar acción
 					bttnCyclePressedCounters[GAIN_DWN_CMD] = 0;
 
-					maxSignalValue += 0.05;
+					if(currentGainIndex > 1){
+						--currentGainIndex;
+					}
+					else{
+						currentGainIndex = 0;
+					}
 
+					currentGain = gainsList[currentGainIndex];
 				}
 			}
 			else{
@@ -283,8 +332,12 @@ int main(void)
 					// Realizar acción
 					bttnCyclePressedCounters[OFF_UP_CMD] = 0;
 
-					minSignalValue -= 0.05;
+					++currentOffsetIndex;
+					if( currentOffsetIndex >= MAX_OFF_COUNT){
+						currentOffsetIndex = (uint8_t)(MAX_OFF_COUNT - 1);
+					}
 
+					currentOffset = offsetList[currentOffsetIndex];
 				}
 			}
 			else{
@@ -302,7 +355,14 @@ int main(void)
 					// Realizar acción
 					bttnCyclePressedCounters[OFF_DWN_CMD] = 0;
 
-					minSignalValue += 0.05;
+					if(currentOffsetIndex > 0){
+						--currentOffsetIndex;
+					}
+					else{
+						currentOffsetIndex = 0;
+					}
+
+					currentOffset = offsetList[currentOffsetIndex];
 				}
 			}
 			else{
@@ -311,39 +371,61 @@ int main(void)
 
 		}
 
-		if( newSignalValue ){
+		// Procesar el ADC
+		if( adcCounter >= adcCycles ){
+			adcCounter = 0;
+
+			// Lectura de la señal por el ADC
+			signalDigitalValue = ADCReadBlocking(ADC_INPUT_CHANNEL);
+
+			//newSignalValue = true;
+
+			// Convertir el valor leído a voltaje
 			double signalValue = (double)signalDigitalValue / (double)adcMaxDigitalCount * adcMaxVoltage;
-			newSignalValue = false;
+			//newSignalValue = false;
 
-			// Salida por el puerto serie
-			if( sendDataToSerial == false ){
-				uartCurrentSendingData = signalDigitalValue;
-				ProcessSignalValueToArray_uint32(signalDigitalValue);
-				sendDataToSerial = true;
-			}
+			// Procesar el valor de la señal con la ganancia y el offset actual
+			double processedSignalValue = currentGain * signalValue + currentOffset;
 
 
-			// Valor máximo
-			if( signalValue > (maxSignalValue - signalEpsilon) ){
-				if( signalValue < (maxSignalValue + signalEpsilon) ){
-					//LedOn(REDLED);
-				}
+			// Calcular el promedio
+			if( processedSamples == 0 ){
+				meanSignalValue = processedSignalValue;
+				maxSignalValue = processedSignalValue;
+				minSignalValue = processedSignalValue;
 			}
 			else{
-				//LedOff(REDLED);
+				meanSignalValue += processedSignalValue;
+			}
+
+			// Valor máximo
+			if( maxSignalValue < processedSignalValue ){
+				maxSignalValue = processedSignalValue;
+			}
+			else{
+				// No hacer nada con el máximo de la señal
 			}
 
 			// Valor mínimo
-			if( signalValue < (minSignalValue + signalEpsilon) ){
-				if( signalValue > (minSignalValue - signalEpsilon) ){
-					//LedOn(GREENLED);
-				}
+			if( minSignalValue > processedSignalValue ){
+				minSignalValue = processedSignalValue;
 			}
 			else{
-				//LedOff(GREENLED);
+				// No hacer nada con la señal
 			}
 
-			//signalValue
+			++processedSamples;
+
+			// Controlar la cantidad de muestras procesadas
+			if( processedSamples >= samplesWindowSize ){
+				// Reiniciar el mínimo y el máximo
+				maxSignalValue = meanSignalValue / processedSamples;
+				minSignalValue = maxSignalValue / processedSamples;
+
+				// Reiniciar el contador de muestras
+				processedSamples = 0;
+			}
+
 		}
 
 		// Receive data throw serial port
@@ -371,29 +453,72 @@ int main(void)
 		// Send data throw Serial port
 		if( writeSerialCounter >= writeSerialCycles ){
 
-			if( sendDataToSerial == true ){
+			// Construir el mensaje a enviar
+			if( finishedSendMessage == true ){
+				switch(currentSendingMsgIndex){
+				case MSG_1:
+					ProcessValueToArray_uint32((uint32_t)(10*currentGain));
+					currentMsgSize = BuildMessageToSend(message_1,valueCharArray_uint8);
+					finishedSendMessage = false;
+					break;
+				case MSG_2:
+					ProcessValueToArray_uint32((uint32_t)(1000*currentOffset));
+					currentMsgSize = BuildMessageToSend(message_2,valueCharArray_uint8);
+					finishedSendMessage = false;
+					break;
+				case MSG_3:
+					ProcessValueToArray_uint32((uint32_t)(100*minSignalValue));
+					currentMsgSize = BuildMessageToSend(message_3,valueCharArray_uint8);
+					finishedSendMessage = false;
+					break;
+				case MSG_4:
+					ProcessValueToArray_uint32((uint32_t)(100*maxSignalValue));
+					currentMsgSize = BuildMessageToSend(message_4,valueCharArray_uint8);
+					finishedSendMessage = false;
+					break;
+				default:
+					break;
+				}
+
+				++currentSendingMsgIndex;
+				if( currentSendingMsgIndex >= MSG_COUNT ){
+					currentSendingMsgIndex = 0;
+				}
+			}
+
+			//if( sendDataToSerial == true ){
 				uint8_t currentByte;
 
-				// Transformar a caracter
-				currentByte = signalCharArray[lastByteSend] + '0';
+				// Transformar valor de la señal a caracter
+				//currentByte = signalCharArray[lastByteSend] + '0';
+				currentByte = currentMsg[lastByteSend];
 
+				// Si está libre el UART enviar el byte si no esperar al próximo ciclo de ejecución
 				if( UARTReady() == true ){
 					UARTSendByte(currentByte);
 
-					if( lastByteSend == (sizeof(signalCharArray) - 1) ){
-						sendDataToSerial = false;
+					if( lastByteSend == currentMsgSize ){
+						finishedSendMessage = true;
 						lastByteSend = 0;
+						++messagesSent;
 
+						UARTSendByte('\n');
 						UARTSendByte('\r');
-
-						writeSerialCounter = 0;		// Resetear el ciclo del contador
 					}
-					else if( lastByteSend <= (sizeof(signalCharArray) - 1) ){
+					else if( lastByteSend <= currentMsgSize ){
 						++lastByteSend;
 					}
 
+					if( messagesSent == MSG_COUNT ){
+						messagesSent = 0;
+						sendDataToSerial = false;
+						writeSerialCounter = 0;		// Resetear el ciclo del contador
+						//UARTSendByte('\r');
+						ToggleLed(GREENLED);
+					}
+
 				}
-			}
+			//}
 		}
 	}
 
@@ -407,6 +532,7 @@ void ISR_RIT(void){
 	++buttonsCounter;
 	++writeSerialCounter;
 	++readSerialCounter;
+	++adcCounter;
 
 	// Leer el estado actual de los botones
 	bttnStates[GAIN_UP_CMD] = ReadButton(commandList[GAIN_UP_CMD]);
@@ -418,10 +544,6 @@ void ISR_RIT(void){
 	double controlSignalValue = SignalSquareGetNextValue();
 	uint32_t controlSignalDigitalValue = (uint32_t)(controlSignalValue/(double)DAC_MAX_OUTPUT*(double)(DAC_BIT_RESOLUTION-1));
 	DACWrite(controlSignalDigitalValue);
-
-	// Lectura de la señal por el ADC
-	signalDigitalValue = ADCReadBlocking(ADC_INPUT_CHANNEL);
-	newSignalValue = true;
 
 	CLearTimer(RIT_TIMER);	// Liberar la bandera del timer
 }
@@ -440,6 +562,57 @@ static void ProcessSignalValueToArray_uint32(uint32_t value){
 	}
 
 }
+
+static void ProcessValueToArray_uint32(uint32_t value){
+	uint8_t i;
+	uint32_t dividendo = value;
+	uint32_t divisor;
+	uint32_t resto;
+
+	for( i = 0 ; i < 4 ; ++i ){
+		divisor = (uint32_t)pow(10,3-i);
+		valueCharArray_uint8[i] = (uint8_t)((double)dividendo / divisor);
+		resto = dividendo % divisor;
+		dividendo = resto;
+	}
+}
+
+static void ProcessValueToArray_double(double value){
+	uint8_t i;
+	uint32_t dividendo = value;
+	uint32_t divisor;
+	uint32_t resto;
+
+	for( i = 0 ; i < 4 ; ++i ){
+		divisor = (uint32_t)pow(10,3-i);
+		valueCharArray_uint8[i] = (uint8_t)((double)dividendo / divisor);
+		resto = dividendo % divisor;
+		dividendo = resto;
+	}
+}
+
+static uint8_t BuildMessageToSend(char str1[],uint8_t value[]){
+	uint8_t i;
+	uint8_t msgSize = 0;
+
+	for( i = 0 ; i <= sizeof(str1) ; ++i ){
+		currentMsg[msgSize] = (*str1);
+		++str1;
+		++msgSize;
+	}
+
+	currentMsg[msgSize] = ' ';
+	++msgSize;
+
+	for( i = 0 ; i < sizeof(value) ; ++i ){
+		currentMsg[msgSize] = (*value) + '0';		// Pasar a numeros imprimibles
+		++(value);
+		++msgSize;
+	}
+
+	return msgSize;
+}
+
 /** @} doxygen end group definition */
 /** @} doxygen end group definition */
 /** @} doxygen end group definition */
